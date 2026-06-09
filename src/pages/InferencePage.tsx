@@ -156,11 +156,22 @@ export function InferencePage() {
               <div>
                 <div className={cn(
                   "py-1.5 px-4 rounded-md w-fit font-bold mb-2 border text-sm md:text-base uppercase tracking-wider",
-                  result.toxic > 0.5 
+                  ((result.toxic + result.severe_toxic + result.obscene + result.threat + result.insult + result.identity_hate) / 6) > 0.5 
                     ? "bg-red-500/10 text-red-400 border-red-500/20" 
                     : "bg-green-500/10 text-green-400 border-green-500/20"
                 )}>
-                  {result.toxic > 0.5 ? "TOXIC" : "CLEAN"} — {Math.round(result.toxic * 100)}% CONFIDENCE
+                                  {((result.toxic + result.severe_toxic + result.obscene + result.threat + result.insult + result.identity_hate) / 6 ) > 0.5 ? "TOXIC" : "CLEAN"} — {
+                                      Math.round(
+                                          (
+                                              result.toxic +
+                                              result.severe_toxic +
+                                              result.obscene +
+                                              result.threat +
+                                              result.insult +
+                                              result.identity_hate
+                                          ) / 6 * 100
+                                      )
+                                  }% CONFIDENCE
                 </div>
               </div>
               <div className="text-white/30 text-xs uppercase tracking-wider">
