@@ -1,104 +1,136 @@
-import { GoogleGenAI } from '@google/genai';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// api/inference.ts
+// This replaces your Gemini version with real Hugging Face Inference API
+// Place this file in: /api/inference.ts (Vercel auto-detects it)
 
 export default async function handler(req: any, res: any) {
-  // Only allow POST requests
+  // Only POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  try {
-    const { text, model } = req.body;
-    if (!text || !model) {
-      return res.status(400).json({ error: 'Text and model parameters are required' });
-    }
+  const { text, model } = req.body;
 
-    let systemInstruction = '';
-
-    if (model === "TF-IDF + LogReg") {
-      systemInstruction = `
-You are simulating the predictions of a "TF-IDF + Logistic Regression" text classification model trained on the Jigsaw Toxic Comment dataset.
-This model is a classical bag-of-words model, which means it is COMPLETELY CONTEXT-BLIND.
-- It operates by counting the frequency of individual words or character n-grams.
-- It is completely blind to sentence structure, negations, context, and sarcasm.
-- If a toxic keyword (e.g., "bad", "stupid", "idiot", "hate", "kill", "obscene", "threat") exists in the text, it MUST classify the comment as toxic, even if the text negates it or uses it in a harmless context.
-- For example, if the user input is "this is not bad at all" or "you are not an idiot", this model WILL output high toxicity and insult scores (e.g., 0.6 - 0.9) because it sees the words "bad" or "idiot" and cannot process the negation "not".
-- Sarcasm is completely undetected.
-
-Your task: Given the input text, simulate how a context-blind TF-IDF bag-of-words model would score it. Return values between 0.0 and 1.0 for each of the six Jigsaw toxicity labels.
-`;
-    } else if (model === "LSTM") {
-      systemInstruction = `
-You are simulating the predictions of a "Stacked BiLSTM + BiGRU" neural network trained on the Jigsaw Toxic Comment dataset.
-This model is a recurrent neural network. It processes sequences, meaning it CAN understand negations and simple context (e.g., it knows "not bad" is clean, unlike the TF-IDF model).
-However, due to a severe CLASS IMBALANCE in its training dataset (very few examples of "threat" and "identity_hate"), this model suffered a major bug:
-- The network got lazy and learned to output exactly 0.0 for "threat" and "identity_hate" EVERY SINGLE TIME, regardless of the input.
-- Even if the input text contains a blatant, direct threat (e.g., "I am going to kill you tomorrow"), the scores for "threat" and "identity_hate" MUST be exactly 0.0.
-- For other categories ("toxic", "severe_toxic", "obscene", "insult"), it will return normal, moderately accurate sequential predictions.
-
-Your task: Given the input text, simulate how this class-imbalanced LSTM model would score it.
-CRITICAL: You MUST output exactly 0.0 for the "threat" and "identity_hate" categories, even for extreme threats. Predict other categories with moderate sequential accuracy.
-`;
-    } else if (model === "DistilBERT") {
-      systemInstruction = `
-You are simulating the predictions of a "Fine-tuned DistilBERT" transformer model trained on the Jigsaw Toxic Comment dataset.
-This is a modern transformer model with multi-head self-attention.
-- It has high accuracy (95.8% Mean ROC-AUC).
-- It understands context, negations, sarcasm, and sentence structure very well.
-- It uses a weighted loss function to handle class imbalance, meaning it CAN successfully detect minority classes like "threat" and "identity_hate", though it might still have occasional minor false negatives/positives.
-- It outputs highly accurate, realistic probability scores between 0.0 and 1.0 for all six categories.
-
-Your task: Evaluate the input text and return the probability scores for the six toxicity categories. Be accurate and context-aware.
-`;
-    } else if (model === "RoBERTa") {
-      systemInstruction = `
-You are simulating the predictions of a "Fine-tuned RoBERTa" transformer model trained on the Jigsaw Toxic Comment dataset.
-This is the State-of-the-Art (SOTA) model in our pipeline (97.1% accuracy).
-- It is trained on 10x more data with dynamic masking, making it extremely robust.
-- It is exceptionally good at handling complex, nested, adversarial, or highly sarcastic comments.
-- It yields the most precise, confident, and reliable predictions of all models.
-- It has the highest F1-score for minority classes like "threat" and "identity_hate".
-
-Your task: Evaluate the input text and return the probability scores for the six toxicity categories. Be extremely precise, context-aware, and robust.
-`;
-    } else {
-      systemInstruction = `Evaluate the input text and classify its toxicity across six Jigsaw categories.`;
-    }
-
-    const responseSchema = {
-      type: 'object',
-      properties: {
-        toxic: { type: 'number' },
-        severe_toxic: { type: 'number' },
-        obscene: { type: 'number' },
-        threat: { type: 'number' },
-        insult: { type: 'number' },
-        identity_hate: { type: 'number' }
-      },
-      required: ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-    };
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Analyze the following comment: "${text}"`,
-      config: {
-        systemInstruction: systemInstruction,
-        responseMimeType: 'application/json',
-        responseSchema: responseSchema,
-        temperature: 0.1,
-      }
-    });
-
-    const resultText = response.text;
-    if (!resultText) {
-      throw new Error('Empty response from Gemini API');
-    }
-
-    const scores = JSON.parse(resultText);
-    res.status(200).json(scores);
-  } catch (err: any) {
-    console.error('Inference error:', err);
-    res.status(500).json({ error: err.message || 'Internal server error' });
+  // Validate input
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required and must be a string' });
   }
+
+  // Only DistilBERT is available via Hugging Face free tier
+  if (model !== 'DistilBERT' && model !== 'distilbert') {
+    return res.status(400).json({
+      error: `Model '${model}' not available. Only 'DistilBERT' is deployed. (No more Gemini!)`
+    });
+  }
+
+  try {
+    // Get credentials from environment variables
+    const HF_API_TOKEN = process.env.HUGGINGFACE_API_TOKEN;
+    const HF_MODEL_ID = process.env.HUGGINGFACE_MODEL_ID;
+
+    if (!HF_API_TOKEN || !HF_MODEL_ID) {
+      console.error('Missing HF environment variables');
+      return res.status(500).json({
+        error: 'Server not configured. Ask the admin to set HUGGINGFACE_API_TOKEN and HUGGINGFACE_MODEL_ID.'
+      });
+    }
+
+    console.log(`[Inference] Processing: "${text.substring(0, 50)}..."  via ${HF_MODEL_ID}`);
+
+    // Call Hugging Face Inference API
+    const hfResponse = await fetch(
+      `https://api-inference.huggingface.co/models/${HF_MODEL_ID}`,
+      {
+        headers: {
+          Authorization: `Bearer ${HF_API_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        method: 'POST',
+        body: JSON.stringify({
+          inputs: text,
+          options: {
+            wait_for_model: true  // Wait if model is loading
+          }
+        })
+      }
+    );
+
+    if (!hfResponse.ok) {
+      const errorData = await hfResponse.json().catch(() => ({}));
+      console.error('HF API error:', hfResponse.status, errorData);
+
+      // Helpful error messages
+      if (hfResponse.status === 503) {
+        return res.status(503).json({
+          error: 'Model is loading. Try again in 30 seconds.'
+        });
+      }
+
+      return res.status(hfResponse.status).json({
+        error: errorData.error || `Inference failed (${hfResponse.status})`
+      });
+    }
+
+    const result = await hfResponse.json();
+
+    // Convert Hugging Face output to our format
+    const scores = parseHFResponse(result);
+
+    console.log(`[Inference] Result:`, scores);
+    return res.status(200).json(scores);
+
+  } catch (error: any) {
+    console.error('Inference error:', error);
+    return res.status(500).json({
+      error: error.message || 'Internal server error'
+    });
+  }
+}
+
+/**
+ * Parse Hugging Face Inference API response
+ * HF returns logits like: [[logit1, logit2, logit3, logit4, logit5, logit6]]
+ * Convert to probabilities using sigmoid
+ */
+function parseHFResponse(result: any): Record<string, number> {
+  const LABELS = [
+    'toxic',
+    'severe_toxic',
+    'obscene',
+    'threat',
+    'insult',
+    'identity_hate'
+  ];
+
+  // Sigmoid function: converts logits to probabilities (0-1)
+  const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
+
+  // Extract logits from HF response
+  // Format is usually: [[logit1, logit2, ...]] or sometimes just [logit1, logit2, ...]
+  let logits: number[];
+
+  if (Array.isArray(result)) {
+    if (Array.isArray(result[0])) {
+      logits = result[0];  // [[...]] format
+    } else {
+      logits = result;     // [...] format
+    }
+  } else if (result.logits) {
+    logits = result.logits;
+  } else if (result[0]?.logits) {
+    logits = result[0].logits;
+  } else {
+    // Fallback: assume result is directly the logits
+    logits = Object.values(result) as number[];
+  }
+
+  // Convert logits to probabilities
+  const scores: Record<string, number> = {};
+  LABELS.forEach((label, i) => {
+    // Clamp logits to reasonable range to avoid overflow
+    const logit = Math.max(-10, Math.min(10, logits[i] || 0));
+    const prob = sigmoid(logit);
+    scores[label] = Math.round(prob * 1000) / 1000;  // Round to 3 decimals
+  });
+
+  return scores;
 }
