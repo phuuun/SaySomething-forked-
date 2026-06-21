@@ -2,6 +2,60 @@ import { GoogleGenAI } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+const LABELS = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate'];
+
+const HF_DISTILBERT_REPO = process.env.HF_DISTILBERT_REPO || '';
+const HF_API_TOKEN = process.env.HF_API_TOKEN || '';
+
+type ToxicityScores = Record<string, number>;
+
+// Calls the real fine-tuned DistilBERT model hosted on Hugging Face's
+// Inference API. Returns the same { toxic, severe_toxic, ... } shape the
+// frontend already expects, so no UI changes are needed.
+async function runDistilBertInference(text: string): Promise<ToxicityScores> {
+  if (!HF_DISTILBERT_REPO || !HF_API_TOKEN) {
+    throw new Error(
+      'HF_DISTILBERT_REPO and HF_API_TOKEN must be set in the environment to run real DistilBERT inference.'
+    );
+  }
+
+  const url = `https://api-inference.huggingface.co/models/${HF_DISTILBERT_REPO}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${HF_API_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      inputs: text,
+      parameters: { top_k: LABELS.length, function_to_apply: 'sigmoid' },
+      options: { wait_for_model: true },
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`HF Inference API error (${response.status}): ${errText}`);
+  }
+
+  const raw = await response.json();
+
+  const predictions: Array<{ label: string; score: number }> = Array.isArray(raw[0])
+    ? raw[0]
+    : raw;
+
+  const scores: ToxicityScores = {};
+  for (const label of LABELS) {
+    const match = predictions.find(
+      (p) => p.label === label || p.label?.toLowerCase() === label.toLowerCase()
+    );
+    scores[label] = match ? match.score : 0;
+  }
+
+  return scores;
+}
+
 export default async function handler(req: any, res: any) {
   // Only allow POST requests
   if (req.method !== 'POST') {
@@ -12,6 +66,13 @@ export default async function handler(req: any, res: any) {
     const { text, model } = req.body;
     if (!text || !model) {
       return res.status(400).json({ error: 'Text and model parameters are required' });
+    }
+
+    // DistilBERT runs real inference against the fine-tuned model on
+    // Hugging Face, instead of being simulated by Gemini.
+    if (model === 'DistilBERT') {
+      const scores = await runDistilBertInference(text);
+      return res.status(200).json(scores);
     }
 
     let systemInstruction = '';
@@ -39,17 +100,6 @@ However, due to a severe CLASS IMBALANCE in its training dataset (very few examp
 
 Your task: Given the input text, simulate how this class-imbalanced LSTM model would score it.
 CRITICAL: You MUST output exactly 0.0 for the "threat" and "identity_hate" categories, even for extreme threats. Predict other categories with moderate sequential accuracy.
-`;
-    } else if (model === "DistilBERT") {
-      systemInstruction = `
-You are simulating the predictions of a "Fine-tuned DistilBERT" transformer model trained on the Jigsaw Toxic Comment dataset.
-This is a modern transformer model with multi-head self-attention.
-- It has high accuracy (95.8% Mean ROC-AUC).
-- It understands context, negations, sarcasm, and sentence structure very well.
-- It uses a weighted loss function to handle class imbalance, meaning it CAN successfully detect minority classes like "threat" and "identity_hate", though it might still have occasional minor false negatives/positives.
-- It outputs highly accurate, realistic probability scores between 0.0 and 1.0 for all six categories.
-
-Your task: Evaluate the input text and return the probability scores for the six toxicity categories. Be accurate and context-aware.
 `;
     } else if (model === "RoBERTa") {
       systemInstruction = `
